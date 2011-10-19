@@ -1,0 +1,4 @@
+simplecache
+
+java classes to implement non-blocking cache.
+cache entries will be checked if expired.
