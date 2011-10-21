@@ -2,58 +2,88 @@ package sg.utils;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class SimpleCache<K,V> implements Cache<K,V> {
 
-    private final ConcurrentMap<K, ExpirableFutureTask<V>> store = new ConcurrentHashMap<K, ExpirableFutureTask<V>>();
+    private final CacheEntryFactory<K,V> factory;
+    private final EvictionPolicy<V> evictionpolicy;
+    private final ConcurrentMap<K, Object> store = new ConcurrentHashMap<K, Object>(); // ensures publication
 
-    private final ExpirableFutureTask.Factory<K,V> factory;
+    public SimpleCache(
+        CacheEntryFactory<K, V> factory,
+        EvictionPolicy<V> evictionpolicy
+    ) {
+        this.factory = factory;
+        this.evictionpolicy = evictionpolicy;
+    }
 
-    public SimpleCache(ExpirableFutureTask.Factory<K, V> factory) {this.factory = factory;}
+    @SuppressWarnings("unchecked")
+    @Override
+    public
+    V get(K key) {
+        Object ret = store.get(key);
 
-    public V get(K key) throws InterruptedException {
-        ExpirableFutureTask<V> value = store.get(key);
-        if (value != null) {
-            if (value.isExpired()) {
-                final ReentrantLock sync = value.sync();
-                if (sync.tryLock()) { // if can't get lock keep using 'old' value
+        if (ret == null) {
+            CountDownLatch latch = new CountDownLatch(1);
+            Object prev = store.putIfAbsent(key, latch);
+
+            if (null == prev) {
+                ret = new Entry<V>(factory.create(key)); // this might throw runtimeexception
+                store.replace(key, ret);
+                latch.countDown();
+            } else {
+                ret = prev;
+            }
+        }
+
+        if (ret instanceof CountDownLatch) {
+            // no instance is created yet for this key, it is being created
+            // by another thread, wait till thats done
+            try {
+                ((CountDownLatch) ret).await();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+
+            // this is newly created instance of this key
+            ret = store.get(key);
+        } else {
+            Entry<V> entry = (Entry<V>) ret;
+
+            if (evictionpolicy != null && evictionpolicy.isExpired(entry.v)) {
+                final AtomicInteger sync = entry.sync;
+
+                if (sync.compareAndSet(0, 1)) { // lock
+                    // multiple threads can return true from canEvict
+                    // but only one can get hold of lock, threads that can't
+                    // get hold of lock doesn't block they returns old value
+                    // while new value is being baked.
                     try {
-                        final ExpirableFutureTask<V> newvalue = factory.create(key);
-                        newvalue.run();
-                        try {
-                            newvalue.get();
-                            store.replace(key, newvalue);
-                            value=newvalue;
-                        } catch (ExecutionException e) { // use 'old' value, can't create newvalue
-                            Throwable cause = e.getCause();
-                            cause.printStackTrace();
+                        entry = (Entry<V>) store.get(key);
+
+                        if (evictionpolicy.isExpired(entry.v)) { // double-check
+                            Entry<V> newval = new Entry<V>(factory.create(key));
+                            store.replace(key, newval); // replace might be faster then put
+                            ret = newval;
                         }
+                    } catch (Throwable catchall) {
+                        catchall.printStackTrace(System.err); // old value will be returned
                     } finally {
-                        sync.unlock();
+                        sync.set(0); // don't forget to unlock
                     }
                 }
             }
-        } else {
-            final ExpirableFutureTask<V> newvalue = factory.create(key);
-            value = store.putIfAbsent(key, newvalue);
-            if (value == null) {// if Absent
-                value = newvalue;
-                newvalue.run(); // guarded by putIfAbsent, as it will return null once
-            }
         }
 
-        try { return value.get(); }
-        catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            throw (cause instanceof RuntimeException) ?
-                    (RuntimeException) cause : new RuntimeException(cause);
-        }
+        return ((Entry<V>) ret).v;
+    }
+
+    private static final
+    class Entry<V> {
+        final AtomicInteger sync = new AtomicInteger(0);
+        final V v;
+        Entry(V v) {this.v=v;}
     }
 }
-
-
-/*
-$Log: $
-*/
