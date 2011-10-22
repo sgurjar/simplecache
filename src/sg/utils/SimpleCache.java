@@ -5,6 +5,21 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+Requirements:
+ 1 only one instance per key should be created, either because its absent
+   for a given key or its expired (in that case it will be recreated).
+ 2 most common path asking for a value for a key should not block or synchronize.
+ 3 when a value doesnt exists for a key, one thread should create the instance
+   of value and put in the cache, other threads asking for same key should wait
+   till thats complete.
+ 4 if a value is expired, one thread should (re)create the instance of value
+   and other threads asking for same key (when one thread is recreating it)
+   should use expired instance of value and should not block.
+
+   http://cs.oswego.edu/pipermail/concurrency-interest/2011-October/008335.html
+
+ */
 public class SimpleCache<K,V> implements Cache<K,V> {
 
     private final CacheEntryFactory<K,V> factory;
@@ -64,7 +79,7 @@ public class SimpleCache<K,V> implements Cache<K,V> {
                         entry = (Entry<V>) store.get(key);
 
                         if (evictionpolicy.isExpired(entry.v)) { // double-check
-                            Entry<V> newval = new Entry<V>(factory.create(key));
+                            Entry<V> newval = new Entry<V>(factory.create(key), sync);
                             store.replace(key, newval); // replace might be faster then put
                             ret = newval;
                         }
@@ -82,8 +97,9 @@ public class SimpleCache<K,V> implements Cache<K,V> {
 
     private static final
     class Entry<V> {
-        final AtomicInteger sync = new AtomicInteger(0);
+        final AtomicInteger sync;
         final V v;
-        Entry(V v) {this.v=v;}
-    }
+        Entry(V v) { this(v, new AtomicInteger(0)); }
+        Entry(V v, AtomicInteger sync) { this.v = v; this.sync = sync; }
+   }
 }
