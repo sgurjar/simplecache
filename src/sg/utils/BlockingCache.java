@@ -25,8 +25,8 @@ public class BlockingCache<K,V> implements Cache<K, V> {
     private final ConcurrentMap<K, Object> store = new ConcurrentHashMap<K, Object>(); // ensures publication
 
     public BlockingCache(
-            CacheEntryFactory<K, V> factory,
-            EvictionPolicy<V> evictionpolicy
+            final CacheEntryFactory<K, V> factory,
+            final EvictionPolicy<V> evictionpolicy
         ) {
             this.factory = factory;
             this.evictionpolicy = evictionpolicy;
@@ -35,20 +35,28 @@ public class BlockingCache<K,V> implements Cache<K, V> {
     @SuppressWarnings("unchecked")
     @Override
     public
-    V get(K key) {
-        Object ret = store.get(key);
+    V get(final K key) {
+        Object ret = this.store.get(key);
 
         if (ret == null) {
-            CountDownLatch latch = new CountDownLatch(1);
-            Object prev = store.putIfAbsent(key, latch);
+            final CountDownLatch latch = new CountDownLatch(1);
+            final Object prev = this.store.putIfAbsent(key, latch);
 
-            if (null == prev) {
-                ret = factory.create(key); // this might throw runtimeexception
-                store.replace(key, ret);
-                latch.countDown();
-            } else {
-                ret = prev;
-            }
+			if (null == prev) {
+				try {
+					// this might throw runtimeexception
+					ret = this.factory.create(key);
+					this.store.replace(key, ret);
+				} catch (final Throwable t) {
+					this.store.remove(key);
+					throw (t instanceof RuntimeException) ? (RuntimeException) t
+							: new RuntimeException(t);
+				} finally {
+					latch.countDown();
+				}
+			} else {
+				ret = prev;
+			}
         }
 
         if (ret instanceof CountDownLatch) {
@@ -56,17 +64,25 @@ public class BlockingCache<K,V> implements Cache<K, V> {
             // by another thread, wait till thats done
             try {
                 ((CountDownLatch) ret).await();
-            } catch (InterruptedException e) {
+            } catch (final InterruptedException e) {
                 throw new RuntimeException(e);
             }
 
             // this is newly created instance of this key
-            ret = store.get(key);
-        } else {
-            V entry = (V) ret;
+            // returned value can be null if it cant create key first-time
+            ret = this.store.get(key);
 
-            if (evictionpolicy != null && evictionpolicy.isExpired(entry)) {
-                store.replace(key, entry, null);
+            if (ret == null) {
+				throw new RuntimeException(
+						"error in creating first instance for key '" + key
+								+ "', please check logs");
+			}
+        }
+        else {
+            final V entry = (V) ret;
+
+            if (this.evictionpolicy != null && this.evictionpolicy.isExpired(entry)) {
+				this.store.remove(key, entry);
                 // so that next get will get updated value
                 // and all threads requesting for same key will BLOCK.
             }
