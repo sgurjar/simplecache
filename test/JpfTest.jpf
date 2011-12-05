@@ -1,0 +1,9 @@
+target = JpfTest
+
+listener=gov.nasa.jpf.listener.PreciseRaceDetector
+
+report.console.property_violation=error,trace
+
+.sourcepath=C:/git-repos/simplecache/src,C:/git-repos/simplecache/test
+.classpath=C:/git-repos/simplecache/build
+
