@@ -18,8 +18,20 @@ import sg.utils.EvictionPolicy;
 public class T {
 
     public static void main(final String[] args) throws Exception {
-        new T.test2().run();
+
+        long test_duration_secs = 15;
+
+        new T.test2(Cache.Factory.DEFAULT.create(factory, evictionPolicy)).run(test_duration_secs);
+        new T.test2(Cache.Factory.BLOCKING.create(factory, evictionPolicy)).run(test_duration_secs);
     }
+
+    static final CacheEntryFactory<String, Element> factory = new CacheEntryFactory<String, Element>() {
+        @Override public Element create(final String key) {return new Element(key);}
+    };
+
+    static final EvictionPolicy<Element> evictionPolicy = new EvictionPolicy<Element>() {
+        @Override public boolean isExpired(final Element entry) {return entry.isModified();}
+    };
 
     static final class Element {
         final File file;
@@ -37,11 +49,7 @@ public class T {
                 fr.read(cbuf);
                 this.data = new String(cbuf);
             } catch (final IOException e) {
-                System.out.printf("Element ctor error in creating %s %s %s %n",
-                        ms(),
-                        Thread.currentThread(),
-                        e
-                );
+                LOG("Element ctor error " + e);
                 throw new RuntimeException(e);
             } finally {
                 if (fr != null) try { fr.close(); } catch (final IOException e) { e.printStackTrace(); }
@@ -49,23 +57,17 @@ public class T {
 
             this.lastmodified = this.file.lastModified();
 
-            System.out.printf("Element ctor created %s %s %s %n",
-                    ms(),
-                    Thread.currentThread(),
-                    this
-            );
+            LOG("Element ctor created " + this);
         }
 
         public boolean isModified() {
             final boolean flag = this.lastmodified != this.file.lastModified();
             if(flag)
-                System.out.printf("%s %s %s lastloaded=%s lastmodified=%s returns=%s%n",
-                              ms(),
-                              Thread.currentThread(),
+                LOG(String.format("%s lastloaded=%s lastmodified=%s returns=%s",
                               this.file,
                               dt(this.lastmodified),
                               dt(this.file.lastModified()),
-                              flag);
+                              flag));
             return flag;
         }
 
@@ -83,48 +85,14 @@ public class T {
         }
     }
 
-    static final CacheEntryFactory<String, Element> factory = new CacheEntryFactory<String, Element>() {
-        @Override
-        public Element create(final String key) {
-            return new Element(key);
-        }
-    };
-    static final EvictionPolicy<Element> evictionPolicy = new EvictionPolicy<Element>() {
-        @Override
-        public boolean isExpired(final Element entry) {
-            return entry.isModified();
-        }
-    };
-
-    static final Cache<String, Element> cache =
-        Cache.Factory.DEFAULT.create(factory, evictionPolicy)
-        //Cache.Factory.BLOCKING.create(factory, evictionPolicy)
-        ;
-
-    String dir = "/tmp/";
-
-    String[] files = { "archetype.txt", "minmax-tictactoe.txt", "tcpdump.txt",
-                       "xa-2-phase-commit.txt"
-                     };
-
-    T() {
-        for (int i = 0; i < this.files.length; i++)
-            this.files[i] = this.dir + this.files[i];
-    }
-
-    void test1() throws Exception {
-        for (final String f : this.files) {
-            final Element elm = cache.get(f);
-            elm.getData();
-            System.out.println(elm);
-        }
-    }
 
     static class test2 {
+        final Cache<String, Element> cache;
+
         final String[] keys = {
-                "bwQ~_yln+EMO!Cum"
-                //"/tmp/tcpdump.txt"
-                //, "/tmp/mem.txt"
+                  "bwQ~_yln+EMO!Cum"
+                , "/tmp/tcpdump.txt"
+                , "/tmp/mem.txt"
         };
 
         final Callable<Element> r1 = new Callable<Element>() {
@@ -137,9 +105,15 @@ public class T {
         final ScheduledExecutorService update_lastmodified_executor = Executors.newSingleThreadScheduledExecutor();
         final ScheduledExecutorService test_executor = Executors.newScheduledThreadPool(10);
 
-        void run() {
+        test2(final Cache<String, Element> cache){
+          this.cache = cache;
+        }
+
+        void run(long secs) {
             schedule_update_lastmodified();
             schedule_test();
+            try{TimeUnit.SECONDS.sleep(secs);}catch(InterruptedException e){throw new RuntimeException(e);}
+            close();
         }
 
         void update_lastmodified() {
@@ -180,21 +154,15 @@ public class T {
                     final Element elm = this.ecs.take().get();
                     NUL.println(elm.getData());
                 } catch (final Throwable e) {
-                    System.out.printf("%s %s %s%n",
-                            ms(),
-                            Thread.currentThread(),
-                            cause(e).getMessage());
+                    LOG("take() "+cause(e));
                 }
             }
         }
 
         void close() {
-            this.threadPool.shutdown();
-            try {
-                this.threadPool.awaitTermination(10, TimeUnit.SECONDS);
-            } catch (final InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+            update_lastmodified_executor.shutdown();
+            test_executor.shutdown();
+            threadPool.shutdown();
         }
     }
 
@@ -239,4 +207,14 @@ public class T {
             this.bytes++; // do something
         }
     });
+
+    static void LOG(Object msg){
+      System.out.println(
+          String.format("%s %s %s",
+            ms(),
+            Thread.currentThread(),
+            String.valueOf(msg)
+          )
+        );
+    }
 }
