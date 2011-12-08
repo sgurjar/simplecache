@@ -5,6 +5,7 @@
     <tstamp/>
 
     <property name="src.dir"    value="src" />
+    <property name="test.dir"   value="test" />
     <property name="build.dir"  value="build" />
     <property name="lib.dir"    value="lib" />
     <property name="dist.dir"   value="dist" />
@@ -34,11 +35,13 @@
 
   <target name="prepare" depends="init">
     <mkdir dir="${build.dir}"/>
+    <mkdir dir="${build.dir}/main"/>
+    <mkdir dir="${build.dir}/test"/>
   </target>
 
-  <target name="compile" depends="prepare" description="Compiles the source code">
+  <target name="compile" depends="prepare" description="Compiles main source code">
     <javac srcdir="${src.dir}"
-           destdir="${build.dir}"
+           destdir="${build.dir}/main"
            debug="${compile.debug}"
            optimize="${compile.optimize}"
            target="${compile.target}"
@@ -47,6 +50,22 @@
            includeAntRuntime="false">
         <compilerarg value="-Xlint:all"/>
         <!-- <classpath refid="compile.class.path"/> -->
+    </javac>
+  </target>
+
+  <target name="compile-test" depends="compile" description="Compiles test source code">
+    <javac srcdir="${test.dir}"
+           destdir="${build.dir}/test"
+           debug="${compile.debug}"
+           optimize="${compile.optimize}"
+           target="${compile.target}"
+           source="${compile.source}"
+           deprecation="${compile.deprecation}"
+           includeAntRuntime="false">
+        <compilerarg value="-Xlint:all"/>
+        <classpath>
+          <pathelement path="${build.dir}/main"/>
+        </classpath>
     </javac>
   </target>
 
